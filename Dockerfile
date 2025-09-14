@@ -10,10 +10,14 @@ WORKDIR /src
 RUN corepack enable && corepack prepare yarn@stable --activate
 
 # 先拷“根目录”的依赖清单（适配 Yarn Berry/Classic），最大化缓存命中
-COPY package.json yarn.lock .yarnrc.yml* ./
-COPY .yarn/ .yarn/ 2>/dev/null || true
-# 让 yarn 能解析 workspace 的子包
+# 注意：不要在 COPY 里写 2>/dev/null；COPY 不支持这种重定向
+COPY package.json yarn.lock ./
+# 让 yarn 能解析 workspace 的子包（至少放入前端子包的 package.json）
 COPY apps/frontend/package.json apps/frontend/
+
+# 若你的仓库确实有 .yarnrc.yml / .yarn，可显式加两行（有文件时再打开）：
+# COPY .yarnrc.yml ./
+# COPY .yarn/ .yarn/
 
 # 容错安装：优先严格模式，失败就退回普通安装（避免 YN0028）
 ENV YARN_ENABLE_IMMUTABLE_INSTALLS=false
