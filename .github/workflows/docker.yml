@@ -1,70 +1,58 @@
-name: Docker Image (UI + GHCR Multi-Arch)
+# syntax=docker/dockerfile:1.7
 
-on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'git ref to build (branch/tag/sha)'
-        required: false
-        default: 'main'
-  push:
-    tags:
-      - "v*"
-    branches:
-      - "main"
+ARG GO_VERSION=1.23
+ARG NODE_VERSION=20
 
-jobs:
-  docker:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write      # 关键：允许推送到 GHCR
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
-          submodules: recursive
+# ---------- Stage 1: Build UI (workspaces at repo root) ----------
+FROM node:${NODE_VERSION}-alpine AS ui
+WORKDIR /src
+# 用 corepack 管理 yarn
+RUN corepack enable && corepack prepare yarn@stable --activate
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}   # 只推 GHCR
-          tags: |
-            type=schedule
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
+# 先拷“根目录”的依赖清单，命中缓存（适配 Yarn Berry/Classic）
+COPY package.json yarn.lock .yarnrc.yml* ./
+# 若是 Yarn Berry，需要 .yarn 目录
+COPY .yarn/ .yarn/ 2>/dev/null || true
+# 再把子包的 package.json 放进去以便解析 workspace
+COPY apps/frontend/package.json apps/frontend/
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+# 在仓库根目录安装依赖（workspace 正确做法）
+# 严格模式会因为锁文件不一致而失败；回退到非严格安装保证构建不被卡住
+RUN sh -lc 'if yarn -v | grep -qE "^[2-9]"; then yarn install --immutable || yarn install; else yarn install --frozen-lockfile || yarn install; fi'
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+# 拷源码并构建前端
+COPY . .
+RUN yarn --cwd apps/frontend build
 
-      # 登录 GHCR（用 GITHUB_TOKEN 即可）
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+# ---------- Stage 2: Build Go binary (embed UI) ----------
+FROM golang:${GO_VERSION}-alpine3.20 AS builder
+RUN apk add --no-cache git ca-certificates gcc musl-dev libc-dev pkgconfig make
+WORKDIR /src
+COPY . .
+# 用上一步已构建好的前端产物（确保 go:embed 能打包）
+COPY --from=ui /src/apps/frontend /src/apps/frontend
 
-      - name: Build and push (amd64 + arm64, UI embedded)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile           # 你的“带前端嵌入”的 Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            GO_VERSION=1.22
-            NODE_VERSION=20
+ENV CGO_ENABLED=1
+# 预热缓存并构建
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    make bbgo || go build -o ./bbgo ./cmd/bbgo
+
+# 统一产物
+RUN mkdir -p /out && \
+    if [ -x ./bbgo ]; then cp ./bbgo /out/bbgo; else cp ./cmd/bbgo/bbgo /out/bbgo; fi
+
+# ---------- Stage 3: Runtime ----------
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+ENV USER=bbgo
+RUN adduser -D -G wheel "$USER"
+USER ${USER}
+WORKDIR /home/${USER}
+COPY --from=builder /out/bbgo /usr/local/bin/bbgo
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/bbgo"]
+CMD ["run","--config","/config/bbgo.yaml","--enable-webserver","--debug"]
