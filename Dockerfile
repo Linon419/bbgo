@@ -11,22 +11,13 @@ WORKDIR /src
 RUN corepack enable && corepack prepare yarn@stable --activate
 
 # 先放入最少的清单文件以命中缓存；不强依赖 yarn.lock/.yarnrc.yml
-# 若仓库根有 package.json（workspace 场景），下面命令会利用它；否则仅用 apps/frontend 的 package.json
-COPY package.json ./ 2>/dev/null || true
+# 只复制 apps/frontend 的 package.json，因为仓库根目录没有 package.json
 COPY apps/frontend/package.json apps/frontend/
 
-# 安装依赖（自动判断是否 workspace）：
-# - 若根目录含 workspaces：在根目录安装（严格 -> 宽松回退）
-# - 否则：进入 apps/frontend 安装（严格 -> 宽松回退）
+# 安装依赖：由于没有根目录的 package.json，直接在 apps/frontend 安装
 ENV YARN_ENABLE_IMMUTABLE_INSTALLS=false
-RUN sh -lc '\
-  if [ -f package.json ] && node -e "try{process.exit(require(\"./package.json\").workspaces?0:1)}catch(e){process.exit(1)}"; then \
-    echo "[UI] Detected workspaces at repo root"; \
-    yarn install --immutable || yarn install; \
-  else \
-    echo "[UI] No workspaces at repo root; installing only apps/frontend"; \
-    cd apps/frontend && (yarn install --frozen-lockfile || yarn install); \
-  fi'
+RUN echo "[UI] Installing dependencies in apps/frontend" && \
+    cd apps/frontend && (yarn install --frozen-lockfile || yarn install)
 
 # 拷贝全部源码并构建前端
 COPY . .
