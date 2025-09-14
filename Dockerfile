@@ -3,51 +3,55 @@
 ARG GO_VERSION=1.23
 ARG NODE_VERSION=20
 
-# ---------- Stage 1: Build UI (workspace 根目录安装 + 容错回退) ----------
+# ---------- Stage 1: Build UI (auto-detect workspace, with fallback) ----------
 FROM node:${NODE_VERSION}-alpine AS ui
 WORKDIR /src
-# 用 corepack 管理 yarn 版本
+
+# Yarn via corepack
 RUN corepack enable && corepack prepare yarn@stable --activate
 
-# 先拷“根目录”的依赖清单（适配 Yarn Berry/Classic），最大化缓存命中
-# 注意：不要在 COPY 里写 2>/dev/null；COPY 不支持这种重定向
-COPY package.json yarn.lock ./
-# 让 yarn 能解析 workspace 的子包（至少放入前端子包的 package.json）
+# 先放入最少的清单文件以命中缓存；不强依赖 yarn.lock/.yarnrc.yml
+# 若仓库根有 package.json（workspace 场景），下面命令会利用它；否则仅用 apps/frontend 的 package.json
+COPY package.json ./ 2>/dev/null || true
 COPY apps/frontend/package.json apps/frontend/
 
-# 若你的仓库确实有 .yarnrc.yml / .yarn，可显式加两行（有文件时再打开）：
-# COPY .yarnrc.yml ./
-# COPY .yarn/ .yarn/
-
-# 容错安装：优先严格模式，失败就退回普通安装（避免 YN0028）
+# 安装依赖（自动判断是否 workspace）：
+# - 若根目录含 workspaces：在根目录安装（严格 -> 宽松回退）
+# - 否则：进入 apps/frontend 安装（严格 -> 宽松回退）
 ENV YARN_ENABLE_IMMUTABLE_INSTALLS=false
-RUN sh -lc 'if yarn -v | grep -qE "^[2-9]"; then yarn install --immutable || yarn install; else yarn install --frozen-lockfile || yarn install; fi'
+RUN sh -lc '\
+  if [ -f package.json ] && node -e "try{process.exit(require(\"./package.json\").workspaces?0:1)}catch(e){process.exit(1)}"; then \
+    echo "[UI] Detected workspaces at repo root"; \
+    yarn install --immutable || yarn install; \
+  else \
+    echo "[UI] No workspaces at repo root; installing only apps/frontend"; \
+    cd apps/frontend && (yarn install --frozen-lockfile || yarn install); \
+  fi'
 
-# 再拷源码并构建前端
+# 拷贝全部源码并构建前端
 COPY . .
 RUN yarn --cwd apps/frontend build
 
 # ---------- Stage 2: Build Go binary (embed UI) ----------
 FROM golang:${GO_VERSION}-alpine3.20 AS builder
-# sqlite3 需要 CGO
 RUN apk add --no-cache git ca-certificates gcc musl-dev libc-dev pkgconfig make
 WORKDIR /src
+
+# 拷贝全部源码 + UI 产物（确保 go:embed 能打包静态资源）
 COPY . .
-# 用上一步生成的前端产物（确保 go:embed 能把静态资源打包进二进制）
 COPY --from=ui /src/apps/frontend /src/apps/frontend
 
-# 预拉依赖，加速构建
+# 预热依赖缓存并构建
+ENV CGO_ENABLED=1
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 
-ENV CGO_ENABLED=1
-# 构建（优先使用 Makefile；没有则回退 go build）
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     make bbgo || go build -o ./bbgo ./cmd/bbgo
 
-# 统一产物到 /out/bbgo
+# 统一产物
 RUN mkdir -p /out && \
     if [ -x ./bbgo ]; then cp ./bbgo /out/bbgo; else cp ./cmd/bbgo/bbgo /out/bbgo; fi
 
