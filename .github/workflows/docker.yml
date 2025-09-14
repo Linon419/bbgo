@@ -32,14 +32,20 @@ jobs:
           echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
       # 构建前强校验：如果还含有 --frozen-lockfile，直接失败，避免浪费时间
-      - name: Sanity check Dockerfile (no --frozen-lockfile)
+      - name: Sanity check Dockerfile (no raw strict install)
         run: |
           echo '--- yarn install lines ---'
           nl -ba Dockerfile | sed -n '/yarn .*install/p'
-          if grep -q -- "--frozen-lockfile" Dockerfile; then
-            echo "::error::Dockerfile still contains --frozen-lockfile. You're building the wrong file/branch."
+          # 只拦截“裸跑严格模式”的写法：RUN yarn install --frozen-lockfile
+          if grep -Eq '^\s*RUN\s+yarn\s+install\s+--frozen-lockfile(\s|$)' Dockerfile; then
+            echo "::error::Found raw 'RUN yarn install --frozen-lockfile'. Please use the workspace-friendly fallback command."
             exit 1
           fi
+          # 可选：提示是否包含我们的容错回退
+          if ! grep -q 'yarn install --immutable || yarn install' Dockerfile; then
+            echo "::warning::Fallback install pattern not found (ok if you intentionally changed it)."
+          fi
+
 
       - name: Docker meta
         id: meta
