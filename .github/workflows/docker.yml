@@ -63,8 +63,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to:   type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/buildcache
+          cache-to:   type=registry,ref=ghcr.io/${{ github.repository }}/buildcache,mode=max
           build-args: |
             GO_VERSION=1.23
             NODE_VERSION=20
