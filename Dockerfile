@@ -11,8 +11,8 @@ WORKDIR /src
 RUN corepack enable && corepack prepare yarn@stable --activate
 
 # 先放入最少的清单文件以命中缓存；不强依赖 yarn.lock/.yarnrc.yml
-# 只复制 apps/frontend 的 package.json，因为仓库根目录没有 package.json
-COPY apps/frontend/package.json apps/frontend/
+# 只复制 apps/frontend 的 package.json 和 yarn.lock，因为仓库根目录没有 package.json
+COPY apps/frontend/package.json apps/frontend/yarn.lock apps/frontend/
 
 # 安装依赖：由于没有根目录的 package.json，直接在 apps/frontend 安装
 ENV YARN_ENABLE_IMMUTABLE_INSTALLS=false
