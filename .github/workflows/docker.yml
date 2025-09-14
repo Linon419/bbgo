@@ -1,4 +1,3 @@
-# .github/workflows/docker-image.yml
 name: Docker Image (UI + GHCR Multi-Arch)
 
 on:
@@ -19,17 +18,27 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Checkout
+      - name: Checkout (build exactly this commit)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
+          # ✅ 用当前触发的提交，而不是 main 默认分支
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
 
       - name: Normalize repo to lowercase
         run: |
           echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-          echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+
+      # ✅ 构建前强校验：Dockerfile 里不能再出现 --frozen-lockfile
+      - name: Sanity check Dockerfile (no --frozen-lockfile)
+        run: |
+          echo '--- yarn install lines ---'
+          nl -ba Dockerfile | sed -n '/yarn .*install/p'
+          if grep -q -- "--frozen-lockfile" Dockerfile; then
+            echo "::error::Dockerfile still contains --frozen-lockfile. You're building the wrong file/branch."
+            exit 1
+          fi
 
       - name: Docker meta
         id: meta
@@ -45,11 +54,8 @@ jobs:
             type=sha
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -67,10 +73,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # ✅ 换新缓存 tag，且全部小写
-          cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v2
-          cache-to:   type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v2,mode=max
-          # ✅ 本次强制不走缓存，确保不用到旧层；后续可删掉以恢复缓存加速
+          # ✅ 换新缓存key并且本次完全不走缓存，避免吃到旧层里的坏命令
+          cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v3
+          cache-to:   type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v3,mode=max
           no-cache: true
           build-args: |
             GO_VERSION=1.23
