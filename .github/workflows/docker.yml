@@ -21,16 +21,17 @@ jobs:
       - name: Checkout (build exactly this commit)
         uses: actions/checkout@v4
         with:
-          # ✅ 用当前触发的提交，而不是 main 默认分支
+          # 锁定当前提交，避免误用旧分支的 Dockerfile
           ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
 
+      # 统一小写，避免 GHCR 引用大小写问题
       - name: Normalize repo to lowercase
         run: |
           echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
-      # ✅ 构建前强校验：Dockerfile 里不能再出现 --frozen-lockfile
+      # 构建前强校验：如果还含有 --frozen-lockfile，直接失败，避免浪费时间
       - name: Sanity check Dockerfile (no --frozen-lockfile)
         run: |
           echo '--- yarn install lines ---'
@@ -54,8 +55,11 @@ jobs:
             type=sha
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -73,10 +77,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # ✅ 换新缓存key并且本次完全不走缓存，避免吃到旧层里的坏命令
+          # 首次改动建议强制不走缓存；确认稳定后可删掉这一行
+          no-cache: true
+          # 用 GHCR 做 registry cache（新 key：buildcache-v3）
           cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v3
           cache-to:   type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v3,mode=max
-          no-cache: true
           build-args: |
             GO_VERSION=1.23
             NODE_VERSION=20
