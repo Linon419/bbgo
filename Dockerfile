@@ -21,7 +21,7 @@ RUN echo "[UI] Installing dependencies in apps/frontend" && \
 
 # 拷贝全部源码并构建前端
 COPY . .
-RUN yarn --cwd apps/frontend build
+RUN cd apps/frontend && yarn build
 
 # ---------- Stage 2: Build Go binary (embed UI) ----------
 FROM golang:${GO_VERSION}-alpine3.20 AS builder
