@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write   # 允许推送到 GHCR
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,19 +26,24 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      # 关键：把 <Owner>/<Repo> 统一转小写，供后续 GHCR 引用
+      - name: Normalize repo to lowercase
+        run: |
+          echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+          echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ env.REPO_LC }}
           tags: |
-            type=ref,event=branch           # e.g. :main
-            type=ref,event=pr               # e.g. :pr-123
-            type=semver,pattern={{version}} # e.g. :v1.2.3
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha                        # e.g. :sha-xxxx
-            # 给默认分支额外打一枚 latest
+            type=sha
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up QEMU
@@ -63,8 +68,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/buildcache
-          cache-to:   type=registry,ref=ghcr.io/${{ github.repository }}/buildcache,mode=max
+          # ⚠️ 缓存也必须用小写 repo，否则就会报你现在这个错
+          cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache
+          cache-to:   type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache,mode=max
           build-args: |
             GO_VERSION=1.23
             NODE_VERSION=20
