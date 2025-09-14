@@ -26,7 +26,6 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # 关键：把 <Owner>/<Repo> 统一转小写，供后续 GHCR 引用
       - name: Normalize repo to lowercase
         run: |
           echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
@@ -68,9 +67,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # ⚠️ 缓存也必须用小写 repo，否则就会报你现在这个错
-          cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache
-          cache-to:   type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache,mode=max
+          # ✅ 换新缓存 tag，且全部小写
+          cache-from: type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v2
+          cache-to:   type=registry,ref=ghcr.io/${{ env.REPO_LC }}/buildcache-v2,mode=max
+          # ✅ 本次强制不走缓存，确保不用到旧层；后续可删掉以恢复缓存加速
+          no-cache: true
           build-args: |
             GO_VERSION=1.23
             NODE_VERSION=20
